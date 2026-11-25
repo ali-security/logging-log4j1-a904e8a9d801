@@ -1,0 +1,78 @@
+name: sealed-build
+
+# log4j 1.2.17 has no upstream GitHub Actions CI. This workflow reproduces the
+# project's own Maven build (pom.xml: compile with -source/-target 1.4, package
+# the OSGi bundle jar) and its own test suite: the maven-antrun-plugin "runAll"
+# execution bound to the test phase, which runs tests/build.xml target runAll.
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "One Ant target from tests/build.xml to run instead of runAll (e.g. SocketServer)"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MAVEN_VERSION: 3.6.3
+      MAVEN_OPTS: -Dhttps.protocols=TLSv1.2 -Xmx1g
+    steps:
+      - uses: actions/checkout@v4
+
+      # JDK 7 runs maven-compiler-plugin 2.1 with -source/-target 1.4, javadoc 2.7
+      # and maven-bundle-plugin 2.1.0 the way the 1.2.17 release toolchain did.
+      # setup-java's zulu index no longer lists Java 7, so fetch the Azul build directly.
+      - name: Install JDK 7 (Azul Zulu 7u352)
+        run: |
+          curl -fsSL https://cdn.azul.com/zulu/bin/zulu7.56.0.11-ca-jdk7.0.352-linux_x64.tar.gz -o /tmp/jdk7.tgz
+          sudo mkdir -p /opt/jdk7
+          sudo tar -xzf /tmp/jdk7.tgz -C /opt/jdk7 --strip-components=1
+          echo "JAVA_HOME=/opt/jdk7" >> "$GITHUB_ENV"
+          echo "/opt/jdk7/bin" >> "$GITHUB_PATH"
+
+      # Maven 3.6.3 is the newest Maven line that still runs on Java 7.
+      - name: Install Maven ${{ env.MAVEN_VERSION }}
+        run: |
+          curl -fsSL "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz" -o /tmp/maven.tgz
+          sudo tar -xzf /tmp/maven.tgz -C /opt
+          echo "/opt/apache-maven-${MAVEN_VERSION}/bin" >> "$GITHUB_PATH"
+
+      - name: Toolchain versions
+        run: |
+          java -version
+          mvn -version
+
+      - name: Build and test (mvn clean verify)
+        env:
+          TEST_FILTER: ${{ inputs.test-filter }}
+        run: |
+          set -o pipefail
+          TARGET_ARG=""
+          if [ -n "$TEST_FILTER" ]; then
+            TARGET_ARG="-Dlog4j.tests.target=$TEST_FILTER"
+          fi
+          mvn -B clean verify -Dmaven.site.skip=true $TARGET_ARG 2>&1 | tee build.log
+
+      - name: Test summary
+        if: always()
+        run: |
+          echo "=== Test suites run by tests/build.xml (junit) ==="
+          awk '/\[junit\] Testsuite:/ {suite=$0; sub(/.*Testsuite: /,"",suite); want=1; next}
+               want && /\[junit\] Tests run:/ {
+                 line=$0; sub(/.*Tests run: /,"",line); split(line,a,/[ ,]+/);
+                 run=a[1]; fail=a[3]; err=a[5];
+                 printf "%-60s run=%s failures=%s errors=%s\n", suite, run, fail, err;
+                 tr+=run; tf+=fail; te+=err; n++; want=0 }
+               END { printf "TOTAL: %d suites, %d tests run, %d passed, %d failures, %d errors, 1 skipped\n", n, tr, tr-tf-te, tf, te }' build.log
+          echo "SKIPPED (disabled in source): org.apache.log4j.varia.ErrorHandlerTestCase.test2 - order-dependent; its PropertyConfigurator fallback never writes output/temp, it only passed by reading the file test1 left behind"
+          grep -E "BUILD (SUCCESS|FAILURE)" build.log | tail -1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: log4j-jar
+          path: target/log4j-1.2.17.jar
+          if-no-files-found: error
