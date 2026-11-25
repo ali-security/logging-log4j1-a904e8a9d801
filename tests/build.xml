@@ -111,6 +111,9 @@
     <condition property="is-windows" value="true">
         <os family="windows"/>
     </condition>
+    <condition property="is-linux" value="true">
+        <os name="Linux"/>
+    </condition>
   </target>
 
   <!-- Clean the parent project                                          -->
@@ -173,7 +176,8 @@
                                      CyclicBuffer, OR,
                                      LevelMatchFilter, PatternParser, 
                                      ErrorHandler,Rewrite, JNDIUtil,
-									 HardenedObjectInputStream"/>
+									 HardenedObjectInputStream,
+                                     NTEventLogAppenderDllPreloading"/>
 
   <!-- ================================================================= -->
   <!-- Longer unit tests                                                 -->
@@ -476,6 +480,24 @@
       <classpath refid="tests.classpath"/>
       <formatter type="plain" usefile="false"/>
       <test name="org.apache.log4j.nt.NTEventLogAppenderTest" />
+      <test name="org.apache.log4j.nt.NTEventLogAppenderDllPathTest" />
+    </junit>
+  </target>
+
+  <!-- NTEventLogAppender must load the library configured in
+       log4j.nteventlog.dll.path rather than one planted on the native
+       library search path, which here is the planted directory only.  -->
+  <target name="NTEventLogAppenderDllPreloading" depends="build" if="is-linux">
+    <property name="nteventlog.planted.dir" location="output/nteventlog-planted"/>
+    <delete dir="${nteventlog.planted.dir}"/>
+    <mkdir dir="${nteventlog.planted.dir}"/>
+    <junit printsummary="yes" fork="yes"
+        haltonfailure="${haltonfailure}" dir="${basedir}">
+      <classpath refid="tests.classpath"/>
+      <sysproperty key="java.library.path" value="${nteventlog.planted.dir}"/>
+      <sysproperty key="log4j.test.nteventlog.planted.dir" value="${nteventlog.planted.dir}"/>
+      <formatter type="plain" usefile="false"/>
+      <test name="org.apache.log4j.nt.NTEventLogAppenderDllPreloadingTest" />
     </junit>
   </target>
 
